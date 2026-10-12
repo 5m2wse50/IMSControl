@@ -1,0 +1,8 @@
+<resources>
+    <!-- Base application theme. Compose draws all UI; this only styles the launch window. -->
+    <style name="Theme.IMSControl" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">?android:attr/colorBackground</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
