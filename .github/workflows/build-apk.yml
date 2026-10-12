@@ -23,13 +23,16 @@ jobs:
       filename: ${{ steps.build_apk.outputs.upload_filename }}
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/cache@v4
+      # Restore-only: the save post-step of actions/cache hangs intermittently
+      # on these runners after Upload APK completes; restore keeps most of the
+      # speedup with no post-job work.
+      - uses: actions/cache/restore@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
             /usr/local/lib/android
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties' )}}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
       - name: Set up OpenJDK 17
@@ -37,13 +40,17 @@ jobs:
         with:
           distribution: "zulu"
           java-version: "17"
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-      - name: Install required platform
-        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - name: Install Android platform and build-tools
+        run: |
+          SDKROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "SDKROOT=$SDKROOT"
+          export PATH="$SDKROOT/cmdline-tools/latest/bin:$PATH"
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;35.0.0"
       - name: Replace android.jar
         run: |
-          curl -L https://github.com/Reginer/aosp-android-jar/raw/main/android-36/android.jar > /usr/local/lib/android/sdk/platforms/android-36/android.jar
+          SDKROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          curl -L https://github.com/Reginer/aosp-android-jar/raw/main/android-36/android.jar > "$SDKROOT/platforms/android-36/android.jar"
       - name: Build APK
         id: build_apk
         run: |
@@ -60,7 +67,9 @@ jobs:
           BUILD_TYPE: ${{ inputs.build-type }}
           RUN_ID: ${{ github.run_id }}
       - name: align APK with zipalign
-        run: $ANDROID_SDK_ROOT/build-tools/34.0.0/zipalign -v -p 4 app/build/outputs/apk/${BUILD_TYPE}/${FILENAME} app-unsigned-aligned.apk
+        run: |
+          SDKROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          "$SDKROOT/build-tools/35.0.0/zipalign" -v -p 4 "app/build/outputs/apk/${BUILD_TYPE}/${FILENAME}" app-unsigned-aligned.apk
         env:
           BUILD_TYPE: ${{ inputs.build-type }}
           FILENAME: ${{ steps.build_apk.outputs.build_filename }}
@@ -69,20 +78,22 @@ jobs:
         env:
           KEYSTORE_B64: ${{ secrets.keystore }}
       - name: Sign APK
-        run: echo "${KEY_PASSWORD}" | $ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner sign --ks keystore.jks --ks-key-alias "${KEY_ALIAS}" --key-pass "env:KEY_PASSWORD" --out dev.bluehouse.enablevolte.apk app-unsigned-aligned.apk
+        run: |
+          SDKROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          if [ -s keystore.jks ]; then
+            echo "${KEY_PASSWORD}" | "$SDKROOT/build-tools/35.0.0/apksigner" sign --ks keystore.jks --ks-key-alias "${KEY_ALIAS}" --key-pass "env:KEY_PASSWORD" --out dev.imscontrol.app.apk app-unsigned-aligned.apk
+          else
+            keytool -genkeypair -keystore debug.jks -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 30 -dname "CN=Android Debug,O=Android,C=US"
+            "$SDKROOT/build-tools/35.0.0/apksigner" sign --ks debug.jks --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android --out dev.imscontrol.app.apk app-unsigned-aligned.apk
+          fi
+          "$SDKROOT/build-tools/35.0.0/apksigner" verify --print-certs dev.imscontrol.app.apk | head -5
         env:
           KEY_ALIAS: ${{ secrets.key-alias }}
           KEY_PASSWORD: ${{ secrets.key-password }}
           BUILD_TYPE: ${{ inputs.build-type }}
-        if: ${{ env.KEY_PASSWORD != '' }}
-      - name: Rename APK
-        run: mv app-unsigned-aligned.apk dev.bluehouse.enablevolte.apk
-        env:
-          KEY_PASSWORD: ${{ secrets.key-password }}
-        if: ${{ env.KEY_PASSWORD == '' }}
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.build_apk.outputs.upload_filename }}
-          path: dev.bluehouse.enablevolte.apk
+          path: dev.imscontrol.app.apk
           retention-days: 3
